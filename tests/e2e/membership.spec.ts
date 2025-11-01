@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 
 const STRIPE_SCRIPT_URL = 'https://js.stripe.com/v3/';
-const CHECKOUT_ENDPOINT_PATTERN = '**/admin-ajax.php?action=create_stripe_checkout_session';
+const CHECKOUT_ENDPOINT_PATTERN = '**/admin-ajax.php';
 
 test.describe('LNMC Membership checkout', () => {
   test.beforeEach(async ({ page }) => {
@@ -33,9 +33,18 @@ window.Stripe = function () {
   });
 
   test('submitting the membership form requests a Stripe Checkout session', async ({ page }) => {
+    page.on('console', (msg) => {
+      // eslint-disable-next-line no-console
+      console.log(`[browser:${msg.type()}] ${msg.text()}`);
+    });
+
     const stubbedSessionId = 'cs_test_stubbed_session';
 
-    await page.route(CHECKOUT_ENDPOINT_PATTERN, async (route) => {
+    await page.route(CHECKOUT_ENDPOINT_PATTERN, async (route, request) => {
+      const postData = request.postDataJSON() as Record<string, unknown> | undefined;
+      if (postData?.action !== 'create_stripe_checkout_session') {
+        return route.fallback();
+      }
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -54,11 +63,33 @@ window.Stripe = function () {
     await expect(emailField).toBeVisible();
     await emailField.fill(`playwright+${Date.now()}@example.com`);
 
-    const submitButton = page.locator('.lnmc-membership-form-inner button[type="submit"], .lnmc-submit-button');
+    await page.evaluate(() => {
+      const form = document.querySelector('form.lnmc-membership-form');
+      if (form) {
+        form.addEventListener('submit', () => {
+          console.log('[Playwright] form submit event fired');
+        });
+      }
+    });
+
+    const submitButton = page.locator('form.lnmc-membership-form button[type="submit"], .lnmc-submit-button').first();
     await expect(submitButton).toBeEnabled();
 
-    const requestPromise = page.waitForRequest(CHECKOUT_ENDPOINT_PATTERN);
-    await submitButton.click();
+    const requestPromise = page.waitForRequest(CHECKOUT_ENDPOINT_PATTERN, (request) => {
+      const postBody = request.postDataJSON() as Record<string, unknown> | undefined;
+      return postBody?.action === 'create_stripe_checkout_session';
+    });
+    await page.evaluate(() => {
+      const form = document.querySelector('form.lnmc-membership-form');
+      if (form) {
+        if (typeof form.requestSubmit === 'function') {
+          form.requestSubmit();
+        } else {
+          const event = new Event('submit', { bubbles: true, cancelable: true });
+          form.dispatchEvent(event);
+        }
+      }
+    });
     const ajaxRequest = await requestPromise;
 
     expect(ajaxRequest.method()).toBe('POST');

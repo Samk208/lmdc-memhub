@@ -69,7 +69,7 @@
         debugLog('Initializing Stripe checkout functionality');
 
         // Handle membership form submission
-        $(document).on('submit', '.lnmc-membership-form', function(e) {
+        $(document).on('submit', 'form.lnmc-membership-form, form.lnmc-membership-form-inner', function(e) {
             e.preventDefault();
             debugLog('Membership form submitted');
             

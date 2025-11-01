@@ -345,7 +345,7 @@ class Shortcodes
 					<h3 class="lnmc-membership-title">%3$s</h3>
 					<p class="lnmc-membership-description">%4$s</p>
 					
-					<form method="post" class="lnmc-membership-form-inner">
+					<form method="post" class="lnmc-membership-form lnmc-membership-form-inner">
 						<div class="lnmc-form-field">
 							<label for="lnmc-email" class="lnmc-form-label">%5$s *</label>
 							<input 
