@@ -127,7 +127,8 @@ class Plugin {
 
 		// Initialize payment components early so AJAX/webhooks are always registered
 		if ( ! isset( $this->stripe_checkout ) ) {
-			$this->stripe_checkout = new Payments\StripeCheckout();
+			// Pass database to prevent recursive Plugin::get_instance() calls inside component constructors
+			$this->stripe_checkout = new Payments\StripeCheckout( $this->database );
 		}
 
 		// Initialize frontend components only when needed

@@ -12,13 +12,13 @@ reviews:
     phpcs:
       enabled: true
 
-# Limit reviews to relevant code and ignore docs and vendor artifacts
+# Limit reviews to relevant code; ignore docs and Markdown entirely
 path_filters:
+  - "**/*.php"
+  - "assets/**"
+  - "src/**"
   - "!docs/**"
   - "!**/*.md"
   - "!**/*.mdx"
   - "!node_modules/**"
   - "!vendor/**"
-  - "**/*.php"
-  - "assets/**"
-  - "src/**"

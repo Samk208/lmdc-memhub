@@ -46,15 +46,21 @@ class StripeCheckout {
 	 *
 	 * @var \LNMC_Member_Hub\Database\Database
 	 */
-	private $database;
+	private \LNMC_Member_Hub\Database\Database $database;
 
 	/**
 	 * Constructor.
+	 *
+	 * @param \LNMC_Member_Hub\Database\Database|null $database Optional database instance to avoid recursive plugin bootstrapping.
 	 */
-	public function __construct() {
+	public function __construct( ?\LNMC_Member_Hub\Database\Database $database = null ) {
 		$this->init_hooks();
 		$this->load_settings();
-		$this->database = \LNMC_Member_Hub\Plugin::get_instance()->get_database();
+		if ( null !== $database ) {
+			$this->database = $database;
+		} else {
+			$this->database = \LNMC_Member_Hub\Plugin::get_instance()->get_database();
+		}
 	}
 
 	/**
