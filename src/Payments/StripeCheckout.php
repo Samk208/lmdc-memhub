@@ -285,122 +285,81 @@ class StripeCheckout {
 		return get_option( 'lnmc_stripe_customer_portal_enabled', true );
 	}
 
-	/**
-	 * Create Stripe checkout session via AJAX.
-	 *
-	 * @return void
-	 */
-	public function create_checkout_session(): void {
-		// Verify nonce
-		if ( ! wp_verify_nonce( $_POST['nonce'] ?? '', 'lnmc_stripe_checkout' ) ) {
-			wp_send_json_error( __( 'Security check failed.', 'lnmc-member-hub' ) );
-		}
+    return $customer->id;
+}
 
-		// Validate required fields
-		$amount = intval( $_POST['amount'] ?? 0 );
-		$email  = sanitize_email( $_POST['email'] ?? '' );
-		$plan_id = sanitize_text_field( $_POST['plan_id'] ?? '' );
+/**
+ * Find customer by email.
+ *
+ * @param string $email Customer email.
+ * @return string|null Customer ID or null.
+ */
+private function find_customer_by_email( string $email ): ?string {
+    \Stripe\Stripe::setApiKey( $this->secret_key );
+    $customers = \Stripe\Customer::all( array( 'email' => $email ) );
 
-		if ( $amount <= 0 || empty( $email ) ) {
-			wp_send_json_error( __( 'Invalid payment details.', 'lnmc-member-hub' ) );
-		}
+    if ( ! empty( $customers->data ) ) {
+        return $customers->data[0]->id;
+    }
 
-		try {
-			// Create or get customer
-			$customer_id = $this->get_or_create_customer( $email );
+    return null;
+}
 
-			// Create checkout session
-			$session_data = array(
-				'payment_method_types' => array( 'card' ),
-				'customer'             => $customer_id,
-				'mode'                 => 'subscription',
-				'success_url'          => home_url( '/thank-you?session_id={CHECKOUT_SESSION_ID}' ),
-				'cancel_url'           => home_url( '/membership' ),
-				'billing_address_collection' => 'required',
-				'customer_update' => array(
-					'address' => 'auto',
-					'name' => 'auto',
-				),
-				'metadata'             => array(
-					'user_email' => $email,
-					'plan_id'    => $plan_id,
-					'plugin'     => 'lnmc-member-hub',
-					'user_ip'    => $this->get_client_ip(),
-					'user_agent' => $_SERVER['HTTP_USER_AGENT'] ?? '',
-				),
-			);
+/**
+ * Register webhook endpoint.
+ *
+ * @return void
+ */
+public function register_webhook_endpoint(): void {
+    add_rewrite_rule(
+        '^stripe-webhook/?$',
+        'index.php?stripe_webhook=1',
+        'top'
+    );
 
-			// Add subscription items
-			if ( ! empty( $plan_id ) ) {
-				$session_data['line_items'] = array(
-					array(
-						'price'    => $plan_id,
-						'quantity' => 1,
-					),
-				);
-			} else {
-				// Fallback to one-time payment
-				$session_data['mode'] = 'payment';
-				$session_data['line_items'] = array(
-					array(
-						'price_data' => array(
-							'currency'     => 'usd',
-							'product_data' => array(
-								'name' => __( 'LNMC Membership', 'lnmc-member-hub' ),
-							),
-							'unit_amount'  => $amount,
-						),
-						'quantity'   => 1,
-					),
-				);
-			}
+    add_filter( 'query_vars', function( $vars ) {
+        $vars[] = 'stripe_webhook';
+        return $vars;
+    });
+}
 
-			\Stripe\Stripe::setApiKey( $this->secret_key );
-			$session = \Stripe\Checkout\Session::create( $session_data );
+/**
+ * Handle webhook request.
+ *
+ * @return void
+ */
+public function handle_webhook_request(): void {
+    if ( ! get_query_var( 'stripe_webhook' ) ) {
+        return;
+    }
 
-			// Log successful checkout session creation
-			$actor_id = get_current_user_id() ?: 0;
-			\LNMC_Member_Hub\Utils\Log_Helper::lmnc_log_admin_action(
-				$actor_id,
-				'create_stripe_checkout_session',
-				array(
-					'email' => $email,
-					'amount' => $amount,
-					'plan_id' => $plan_id,
-				),
-				array(
-					'session_id' => $session->id,
-					'customer_id' => $customer_id,
-				),
-				'stripe_checkout'
-			);
+    $this->handle_webhook();
+    exit;
+}
 
-			wp_send_json_success( array( 'session_id' => $session->id ) );
+/**
+ * Handle Stripe webhook.
+ *
+ * @return void
+ */
+public function handle_webhook(): void {
+    $payload = file_get_contents( 'php://input' );
+    $sig_header = $_SERVER['HTTP_STRIPE_SIGNATURE'] ?? '';
 
-		} catch ( \Stripe\Exception\ApiErrorException $e ) {
-			error_log( 'Stripe API error: ' . $e->getMessage() );
-			wp_send_json_error( 'Stripe error: ' . $e->getMessage() );
-		} catch ( \Exception $e ) {
-			error_log( 'Stripe checkout error: ' . $e->getMessage() );
-			wp_send_json_error( $e->getMessage() );
-		}
-	}
+    if ( empty( $payload ) || empty( $sig_header ) ) {
+        http_response_code( 400 );
+        echo 'Invalid webhook request';
+        exit;
+    }
 
-	/**
-	 * Create Stripe customer portal session.
-	 *
-	 * @return void
-	 */
-	public function create_customer_portal_session(): void {
-		// Verify nonce
-		if ( ! wp_verify_nonce( $_POST['nonce'] ?? '', 'lnmc_stripe_checkout' ) ) {
-			wp_send_json_error( __( 'Security check failed.', 'lnmc-member-hub' ) );
-		}
+    try {
+        // Verify webhook signature
+        $this->verify_webhook_signature( $payload, $sig_header );
 
-		// Check if user is logged in
-		if ( ! is_user_logged_in() ) {
-			wp_send_json_error( __( 'You must be logged in to access the customer portal.', 'lnmc-member-hub' ) );
-		}
+        $event = json_decode( $payload );
+        if ( ! $event ) {
+            throw new \Exception( 'Invalid JSON payload' );
+        }
 
 		try {
 			$user = wp_get_current_user();
@@ -432,14 +391,16 @@ class StripeCheckout {
 				'stripe_portal'
 			);
 
-			wp_send_json_success( array( 'url' => $session->url ) );
+			wp_send_json_success( array( 'session_id' => $session->id ) );
 
 		} catch ( \Stripe\Exception\ApiErrorException $e ) {
+			// Log full details server-side, but do not leak internals to client
 			error_log( 'Stripe API error: ' . $e->getMessage() );
-			wp_send_json_error( 'Stripe error: ' . $e->getMessage() );
+			wp_send_json_error( __( 'An error occurred processing your payment. Please try again.', 'lnmc-member-hub' ) );
 		} catch ( \Exception $e ) {
-			error_log( 'Stripe customer portal error: ' . $e->getMessage() );
-			wp_send_json_error( $e->getMessage() );
+			// Log full details server-side, but do not leak internals to client
+			error_log( 'Stripe checkout error: ' . $e->getMessage() );
+			wp_send_json_error( __( 'An error occurred processing your payment. Please try again.', 'lnmc-member-hub' ) );
 		}
 	}
 
