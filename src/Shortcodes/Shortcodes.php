@@ -25,7 +25,11 @@ class Shortcodes
 	{
 		$this->register_shortcodes();
 		// Ensure Stripe JS is enqueued when the hub shortcode is present (mirrors CSS logic)
-		\add_action('wp_enqueue_scripts', array($this, 'enqueue_membership_hub_scripts'), 20);
+		\add_action('wp_enqueue_scripts', function() {
+			if (\method_exists($this, 'enqueue_membership_hub_scripts')) {
+				$this->enqueue_membership_hub_scripts();
+			}
+		}, 20);
 	}
 
 	/**

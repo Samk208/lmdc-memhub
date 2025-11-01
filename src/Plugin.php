@@ -125,6 +125,11 @@ class Plugin {
 			add_action( 'admin_init', array( $this, 'init_admin_components' ) );
 		}
 
+		// Initialize payment components early so AJAX/webhooks are always registered
+		if ( ! isset( $this->stripe_checkout ) ) {
+			$this->stripe_checkout = new Payments\StripeCheckout();
+		}
+
 		// Initialize frontend components only when needed
 		add_action( 'wp_loaded', array( $this, 'init_frontend_components' ) );
 
@@ -163,11 +168,6 @@ class Plugin {
 		if ( ! is_admin() && ! wp_doing_ajax() ) {
 			new Frontend\Assets();
 			new Frontend\Protection();
-			
-			// Initialize payment components only when needed
-			if ( ! isset($this->stripe_checkout) ) {
-				$this->stripe_checkout = new Payments\StripeCheckout();
-			}
 		}
 	}
 
