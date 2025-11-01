@@ -10,3 +10,27 @@ rules:
 preferences:
   summarize_large_prs: true
   max_comments: 50
+
+reviews:
+  high_level_summary: true
+  auto_review:
+    enabled: true
+    drafts: false
+  tools:
+    markdownlint:
+      enabled: false
+    languagetool:
+      enabled: false
+    phpcs:
+      enabled: true
+
+# Exclude docs and non-code paths from reviews
+path_filters:
+  - "!docs/**"
+  - "!**/*.md"
+  - "!**/*.mdx"
+  - "!node_modules/**"
+  - "!vendor/**"
+  - "**/*.php"
+  - "src/**"
+  - "assets/**"
