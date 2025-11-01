@@ -274,16 +274,39 @@ class StripeCheckout {
 		}
 
 		return false;
-	}
 
-	/**
-	 * Check if customer portal is enabled.
-	 *
-	 * @return bool
-	 */
-	private function is_customer_portal_enabled(): bool {
-		return get_option( 'lnmc_stripe_customer_portal_enabled', true );
-	}
+/**
+ * Check if customer portal is enabled.
+ *
+ * @return bool
+ */
+private function is_customer_portal_enabled(): bool {
+    return get_option( 'lnmc_stripe_customer_portal_enabled', true );
+}
+
+/**
+ * Get or create Stripe customer.
+ *
+ * @param string $email Customer email.
+ * @return string Customer ID.
+ */
+private function get_or_create_customer( string $email ): string {
+    // Check if customer already exists
+    $existing_customer = $this->find_customer_by_email( $email );
+    
+    if ( $existing_customer ) {
+        return $existing_customer;
+    }
+
+    // Create new customer
+    \Stripe\Stripe::setApiKey( $this->secret_key );
+    $customer = \Stripe\Customer::create( array(
+        'email' => $email,
+        'metadata' => array(
+            'plugin' => 'lnmc-member-hub',
+            'created_via' => 'checkout',
+        ),
+    ) );
 
     return $customer->id;
 }
@@ -361,630 +384,466 @@ public function handle_webhook(): void {
             throw new \Exception( 'Invalid JSON payload' );
         }
 
-		try {
-			$user = wp_get_current_user();
-			$member = $this->database->get_member_by_user_id( $user->ID );
-
-			if ( ! $member || empty( $member->stripe_customer_id ) ) {
-				wp_send_json_error( __( 'No active subscription found.', 'lnmc-member-hub' ) );
-			}
-
-			// Create customer portal session
-			\Stripe\Stripe::setApiKey( $this->secret_key );
-			$session = \Stripe\BillingPortal\Session::create( array(
-				'customer'   => $member->stripe_customer_id,
-				'return_url' => home_url( '/member-dashboard' ),
-			) );
-
-			// Log successful customer portal session creation
-			\LNMC_Member_Hub\Utils\Log_Helper::lmnc_log_admin_action(
-				$user->ID,
-				'create_stripe_customer_portal_session',
-				array(
-					'user_id' => $user->ID,
-					'stripe_customer_id' => $member->stripe_customer_id,
-				),
-				array(
-					'url' => $session->url,
-					'session_id' => $session->id,
-				),
-				'stripe_portal'
-			);
-
-			wp_send_json_success( array( 'session_id' => $session->id ) );
-
-		} catch ( \Stripe\Exception\ApiErrorException $e ) {
-			// Log full details server-side, but do not leak internals to client
-			error_log( 'Stripe API error: ' . $e->getMessage() );
-			wp_send_json_error( __( 'An error occurred processing your payment. Please try again.', 'lnmc-member-hub' ) );
-		} catch ( \Exception $e ) {
-			// Log full details server-side, but do not leak internals to client
-			error_log( 'Stripe checkout error: ' . $e->getMessage() );
-			wp_send_json_error( __( 'An error occurred processing your payment. Please try again.', 'lnmc-member-hub' ) );
-		}
-	}
-
-	/**
-	 * Get client IP address.
-	 *
-	 * @return string
-	 */
-	private function get_client_ip(): string {
-		$ip_keys = array( 'HTTP_CLIENT_IP', 'HTTP_X_FORWARDED_FOR', 'REMOTE_ADDR' );
-		
-		foreach ( $ip_keys as $key ) {
-			if ( array_key_exists( $key, $_SERVER ) === true ) {
-				foreach ( explode( ',', $_SERVER[ $key ] ) as $ip ) {
-					$ip = trim( $ip );
-					if ( filter_var( $ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE ) !== false ) {
-						return $ip;
-					}
-				}
-			}
-		}
-		
-		return $_SERVER['REMOTE_ADDR'] ?? '';
-	}
-
-	/**
-	 * Get or create Stripe customer.
-	 *
-	 * @param string $email Customer email.
-	 * @return string Customer ID.
-	 */
-	private function get_or_create_customer( string $email ): string {
-		// Check if customer already exists
-		$existing_customer = $this->find_customer_by_email( $email );
-		
-		if ( $existing_customer ) {
-			return $existing_customer;
-		}
-
-		// Create new customer
-		\Stripe\Stripe::setApiKey( $this->secret_key );
-		$customer = \Stripe\Customer::create( array(
-			'email' => $email,
-			'metadata' => array(
-				'plugin' => 'lnmc-member-hub',
-				'created_via' => 'checkout',
-			),
-		) );
-
-		return $customer->id;
-	}
-
-	/**
-	 * Find customer by email.
-	 *
-	 * @param string $email Customer email.
-	 * @return string|null Customer ID or null.
-	 */
-	private function find_customer_by_email( string $email ): ?string {
-		\Stripe\Stripe::setApiKey( $this->secret_key );
-		$customers = \Stripe\Customer::all( array( 'email' => $email ) );
-
-		if ( ! empty( $customers->data ) ) {
-			return $customers->data[0]->id;
-		}
-
-		return null;
-	}
-
-	/**
-	 * Register webhook endpoint.
-	 *
-	 * @return void
-	 */
-	public function register_webhook_endpoint(): void {
-		add_rewrite_rule(
-			'^stripe-webhook/?$',
-			'index.php?stripe_webhook=1',
-			'top'
-		);
-
-		add_filter( 'query_vars', function( $vars ) {
-			$vars[] = 'stripe_webhook';
-			return $vars;
-		});
-	}
-
-	/**
-	 * Handle webhook request.
-	 *
-	 * @return void
-	 */
-	public function handle_webhook_request(): void {
-		if ( ! get_query_var( 'stripe_webhook' ) ) {
-			return;
-		}
-
-		$this->handle_webhook();
-		exit;
-	}
-
-	/**
-	 * Handle Stripe webhook.
-	 *
-	 * @return void
-	 */
-	public function handle_webhook(): void {
-		$payload = file_get_contents( 'php://input' );
-		$sig_header = $_SERVER['HTTP_STRIPE_SIGNATURE'] ?? '';
-
-		if ( empty( $payload ) || empty( $sig_header ) ) {
-			http_response_code( 400 );
-			echo 'Invalid webhook request';
-			exit;
-		}
-
-		try {
-			// Verify webhook signature
-			$this->verify_webhook_signature( $payload, $sig_header );
-
-			$event = json_decode( $payload );
-			if ( ! $event ) {
-				throw new \Exception( 'Invalid JSON payload' );
-			}
-
-			$this->process_webhook_event( $event );
-
-			http_response_code( 200 );
-			echo 'Webhook processed successfully';
-
-		} catch ( \Exception $e ) {
-			error_log( 'Stripe webhook error: ' . $e->getMessage() );
-			http_response_code( 400 );
-			echo 'Webhook error: ' . $e->getMessage();
-		}
-	}
-
-	/**
-	 * Verify webhook signature.
-	 *
-	 * @param string $payload Raw payload.
-	 * @param string $sig_header Signature header.
-	 * @return void
-	 * @throws \Exception If signature verification fails.
-	 */
-	private function verify_webhook_signature( string $payload, string $sig_header ): void {
-		if ( empty( $this->webhook_secret ) ) {
-			throw new \Exception( 'Webhook secret not configured' );
-		}
-
-		$signature_parts = explode( ',', $sig_header );
-		$timestamp = '';
-		$signature = '';
-
-		foreach ( $signature_parts as $part ) {
-			if ( strpos( $part, 't=' ) === 0 ) {
-				$timestamp = substr( $part, 2 );
-			} elseif ( strpos( $part, 'v1=' ) === 0 ) {
-				$signature = substr( $part, 3 );
-			}
-		}
-
-		if ( empty( $timestamp ) || empty( $signature ) ) {
-			throw new \Exception( 'Invalid signature format' );
-		}
-
-		// Check timestamp (reject if older than 5 minutes)
-		if ( time() - $timestamp > 300 ) {
-			throw new \Exception( 'Webhook timestamp too old' );
-		}
-
-		// Verify signature
-		$expected_signature = hash_hmac( 'sha256', $timestamp . '.' . $payload, $this->webhook_secret );
-		
-		if ( ! hash_equals( $expected_signature, $signature ) ) {
-			throw new \Exception( 'Invalid signature' );
-		}
-	}
-
-	/**
-	 * Process webhook event.
-	 *
-	 * @param object $event Stripe event object.
-	 * @return void
-	 */
-	private function process_webhook_event( $event ): void {
-		switch ( $event->type ) {
-			case 'checkout.session.completed':
-				$this->handle_checkout_session_completed( $event->data->object );
-				break;
-			case 'customer.subscription.created':
-				$this->handle_subscription_created( $event->data->object );
-				break;
-			case 'customer.subscription.updated':
-				$this->handle_subscription_updated( $event->data->object );
-				break;
-			case 'customer.subscription.deleted':
-				$this->handle_subscription_deleted( $event->data->object );
-				break;
-			case 'invoice.payment_failed':
-				$this->handle_payment_failed( $event->data->object );
-				break;
-			case 'invoice.payment_succeeded':
-				$this->handle_payment_succeeded( $event->data->object );
-				break;
-			case 'customer.updated':
-				$this->handle_customer_updated( $event->data->object );
-				break;
-			default:
-				error_log( 'Unhandled Stripe webhook event: ' . $event->type );
-		}
-	}
-
-	/**
-	 * Handle checkout session completed.
-	 *
-	 * @param object $session Checkout session object.
-	 * @return void
-	 */
-	private function handle_checkout_session_completed( $session ): void {
-		$customer_id = $session->customer;
-		$email = $session->customer_details->email ?? '';
-		$subscription_id = $session->subscription ?? null;
-		
-		// Get or create user
-		$user = get_user_by( 'email', $email );
-		
-		if ( ! $user ) {
-			$user_id = wp_create_user( $email, wp_generate_password(), $email );
-			if ( is_wp_error( $user_id ) ) {
-				error_log( 'Failed to create user for email: ' . $email );
-				return;
-			}
-			$user = get_user_by( 'id', $user_id );
-		}
-
-		// Add membership role
-		$user->add_role( 'lnmc_member' );
-
-		// Save member to database
-		$member_data = array(
-			'user_id' => $user->ID,
-			'membership_status' => 'active',
-			'membership_type' => 'standard',
-			'subscription_id' => $subscription_id,
-			'payment_amount' => $session->amount_total / 100, // Convert from cents
-			'payment_currency' => strtoupper( $session->currency ),
-			'join_date' => current_time( 'mysql' ),
-			'payment_status' => 'completed',
-			'stripe_customer_id' => $customer_id,
-			'stripe_subscription_id' => $subscription_id,
-			'webhook_processed' => 1,
-		);
-
-		$member_id = $this->database->save_member( $member_data );
-
-		if ( $member_id ) {
-			// Log the activity
-			$this->database->log_activity(
-				$member_id,
-				'membership_created',
-				sprintf( 'Membership created via Stripe checkout for user %s', $user->display_name ),
-				array(
-					'session_id' => $session->id,
-					'customer_id' => $customer_id,
-					'subscription_id' => $subscription_id,
-					'amount' => $session->amount_total / 100,
-				)
-			);
-
-			// Send welcome email
-			$this->send_welcome_email( $email );
-		}
-	}
-
-	/**
-	 * Handle subscription created.
-	 *
-	 * @param object $subscription Subscription object.
-	 * @return void
-	 */
-	private function handle_subscription_created( $subscription ): void {
-		$customer_id = $subscription->customer;
-		$email = $this->get_customer_email( $customer_id );
-		
-		// Find member by customer ID
-		$member = $this->database->get_member_by_stripe_customer_id( $customer_id );
-		if ( $member ) {
-			$this->database->update_member( $member->id, array(
-				'membership_status' => 'active',
-				'stripe_subscription_id' => $subscription->id,
-				'webhook_processed' => 1,
-			) );
-
-			// Log the activity
-			$this->database->log_activity(
-				$member->id,
-				'subscription_created',
-				sprintf( 'Stripe subscription created: %s', $subscription->id ),
-				array( 'subscription_id' => $subscription->id )
-			);
-		}
-	}
-
-	/**
-	 * Handle subscription updated.
-	 *
-	 * @param object $subscription Subscription object.
-	 * @return void
-	 */
-	private function handle_subscription_updated( $subscription ): void {
-		$customer_id = $subscription->customer;
-		$status = $subscription->status;
-		
-		// Find member by customer ID
-		$member = $this->database->get_member_by_stripe_customer_id( $customer_id );
-		if ( $member ) {
-			$update_data = array(
-				'membership_status' => $status,
-				'webhook_processed' => 1,
-			);
-
-			// Update expiry date if available
-			if ( isset( $subscription->current_period_end ) ) {
-				$update_data['expiry_date'] = date( 'Y-m-d H:i:s', $subscription->current_period_end );
-			}
-
-			$this->database->update_member( $member->id, $update_data );
-
-			// Log the activity
-			$this->database->log_activity(
-				$member->id,
-				'subscription_updated',
-				sprintf( 'Subscription status updated to: %s', $status ),
-				array( 'subscription_id' => $subscription->id, 'status' => $status )
-			);
-		}
-	}
-
-	/**
-	 * Handle subscription deleted.
-	 *
-	 * @param object $subscription Subscription object.
-	 * @return void
-	 */
-	private function handle_subscription_deleted( $subscription ): void {
-		$customer_id = $subscription->customer;
-		
-		// Find member by customer ID or subscription ID
-		$member = $this->database->get_member_by_stripe_customer_id( $customer_id );
-		if ( ! $member ) {
-			$member = $this->database->get_member_by_stripe_subscription_id( $subscription->id );
-		}
-
-		if ( $member ) {
-			// Update member status
-			$this->database->update_member( $member->id, array(
-				'membership_status' => 'cancelled',
-				'payment_status' => 'cancelled',
-				'webhook_processed' => 1,
-			) );
-
-			// Remove membership role from user
-			$user = get_user_by( 'id', $member->user_id );
-			if ( $user ) {
-				$user->remove_role( 'lnmc_member' );
-			}
-
-			// Log the activity
-			$this->database->log_activity(
-				$member->id,
-				'subscription_cancelled',
-				sprintf( 'Subscription cancelled: %s', $subscription->id ),
-				array( 'subscription_id' => $subscription->id )
-			);
-		}
-	}
-
-	/**
-	 * Handle payment failed.
-	 *
-	 * @param object $invoice Invoice object.
-	 * @return void
-	 */
-	private function handle_payment_failed( $invoice ): void {
-		$customer_id = $invoice->customer;
-		$subscription_id = $invoice->subscription;
-		
-		// Find member by customer ID
-		$member = $this->database->get_member_by_stripe_customer_id( $customer_id );
-		if ( $member ) {
-			$this->database->update_member( $member->id, array(
-				'membership_status' => 'past_due',
-				'payment_status' => 'failed',
-				'webhook_processed' => 1,
-			) );
-
-			// Log the activity
-			$this->database->log_activity(
-				$member->id,
-				'payment_failed',
-				sprintf( 'Payment failed for invoice: %s', $invoice->id ),
-				array( 'invoice_id' => $invoice->id, 'subscription_id' => $subscription_id )
-			);
-
-			// Send payment failed email
-			$user = get_user_by( 'id', $member->user_id );
-			if ( $user ) {
-				$this->send_payment_failed_email( $user->user_email );
-			}
-		}
-	}
-
-	/**
-	 * Handle payment succeeded.
-	 *
-	 * @param object $invoice Invoice object.
-	 * @return void
-	 */
-	private function handle_payment_succeeded( $invoice ): void {
-		$customer_id = $invoice->customer;
-		$subscription_id = $invoice->subscription;
-		
-		// Find member by customer ID
-		$member = $this->database->get_member_by_stripe_customer_id( $customer_id );
-		if ( $member ) {
-			$this->database->update_member( $member->id, array(
-				'membership_status' => 'active',
-				'payment_status' => 'completed',
-				'last_payment_date' => current_time( 'mysql' ),
-				'webhook_processed' => 1,
-			) );
-
-			// Log the activity
-			$this->database->log_activity(
-				$member->id,
-				'payment_succeeded',
-				sprintf( 'Payment succeeded for invoice: %s', $invoice->id ),
-				array( 'invoice_id' => $invoice->id, 'subscription_id' => $subscription_id )
-			);
-		}
-	}
-
-	/**
-	 * Handle customer updated.
-	 *
-	 * @param object $customer Customer object.
-	 * @return void
-	 */
-	private function handle_customer_updated( $customer ): void {
-		// Find member by customer ID
-		$member = $this->database->get_member_by_stripe_customer_id( $customer->id );
-		if ( $member ) {
-			// Log the activity
-			$this->database->log_activity(
-				$member->id,
-				'customer_updated',
-				sprintf( 'Customer information updated in Stripe: %s', $customer->id ),
-				array( 'customer_id' => $customer->id )
-			);
-		}
-	}
-
-	/**
-	 * Get customer email from Stripe.
-	 *
-	 * @param string $customer_id Customer ID.
-	 * @return string Customer email.
-	 */
-	private function get_customer_email( string $customer_id ): string {
-		\Stripe\Stripe::setApiKey( $this->secret_key );
-		$customer = \Stripe\Customer::retrieve( $customer_id );
-
-		return $customer->email ?? '';
-	}
-
-	/**
-	 * Send welcome email.
-	 *
-	 * @param string $email User email.
-	 * @return void
-	 */
-	private function send_welcome_email( string $email ): void {
-		$user = get_user_by( 'email', $email );
-		if ( ! $user ) {
-			return;
-		}
-
-		// Use the Email Helper class
-		\LNMC_Member_Hub\Utils\Email_Helper::send_welcome_email( $user->ID, 'LNMC Membership' );
-	}
-
-	/**
-	 * Send payment failed email.
-	 *
-	 * @param string $email User email.
-	 * @return void
-	 */
-	private function send_payment_failed_email( string $email ): void {
-		$user = get_user_by( 'email', $email );
-		if ( ! $user ) {
-			return;
-		}
-
-		$subject = __( 'Payment Failed - LNMC Membership', 'lnmc-member-hub' );
-		$message = __( 'Your membership payment was not successful. Please update your payment method to continue your membership.', 'lnmc-member-hub' );
-
-		wp_mail( $email, $subject, $message );
-	}
-
-	/**
-	 * Retry failed webhook.
-	 *
-	 * @return void
-	 */
-	public function retry_failed_webhook(): void {
-		// Verify nonce
-		if ( ! wp_verify_nonce( $_POST['nonce'] ?? '', 'lnmc_stripe_checkout' ) ) {
-			wp_send_json_error( __( 'Security check failed.', 'lnmc-member-hub' ) );
-		}
-
-		// Check permissions
-		if ( ! current_user_can( 'manage_options' ) ) {
-			wp_send_json_error( __( 'Insufficient permissions.', 'lnmc-member-hub' ) );
-		}
-
-		$webhook_id = sanitize_text_field( $_POST['webhook_id'] ?? '' );
-		if ( empty( $webhook_id ) ) {
-			wp_send_json_error( __( 'Webhook ID is required.', 'lnmc-member-hub' ) );
-		}
-
-		try {
-			// Implement webhook retry logic here
-			// This would typically involve fetching the event from Stripe and reprocessing it
-			wp_send_json_success( __( 'Webhook retry initiated.', 'lnmc-member-hub' ) );
-		} catch ( \Exception $e ) {
-			wp_send_json_error( $e->getMessage() );
-		}
-	}
-
-	/**
-	 * Get Stripe publishable key.
-	 *
-	 * @return string
-	 */
-	public function get_publishable_key(): string {
-		return $this->publishable_key;
-	}
-
-	/**
-	 * Check if Stripe is configured.
-	 *
-	 * @return bool
-	 */
-	public function is_configured(): bool {
-		return ! empty( $this->publishable_key ) && ! empty( $this->secret_key );
-	}
-
-	/**
-	 * Get current mode.
-	 *
-	 * @return string
-	 */
-	public function get_mode(): string {
-		return $this->mode;
-	}
-
-	/**
-	 * Get member by Stripe customer ID.
-	 *
-	 * @param string $customer_id Stripe customer ID.
-	 * @return object|null Member object or null.
-	 */
-	public function get_member_by_stripe_customer_id( string $customer_id ) {
-		return $this->database->get_member_by_stripe_customer_id( $customer_id );
-	}
-
-	/**
-	 * Get member by Stripe subscription ID.
-	 *
-	 * @param string $subscription_id Stripe subscription ID.
-	 * @return object|null Member object or null.
-	 */
-	public function get_member_by_stripe_subscription_id( string $subscription_id ) {
-		return $this->database->get_member_by_stripe_subscription_id( $subscription_id );
-	}
+        $this->process_webhook_event( $event );
+
+        http_response_code( 200 );
+        echo 'Webhook processed successfully';
+
+    } catch ( \Exception $e ) {
+        error_log( 'Stripe webhook error: ' . $e->getMessage() . "\n" . $e->getTraceAsString() );
+        http_response_code( 400 );
+        echo 'Webhook error';
+    }
+}
+
+/**
+ * Verify webhook signature.
+ *
+ * @param string $payload Raw payload.
+ * @param string $sig_header Signature header.
+ * @return void
+ * @throws \Exception If signature verification fails.
+ */
+private function verify_webhook_signature( string $payload, string $sig_header ): void {
+    if ( empty( $this->webhook_secret ) ) {
+        throw new \Exception( 'Webhook secret not configured' );
+    }
+
+    $signature_parts = explode( ',', $sig_header );
+    $timestamp = '';
+    $signature = '';
+
+    foreach ( $signature_parts as $part ) {
+        if ( strpos( $part, 't=' ) === 0 ) {
+            $timestamp = substr( $part, 2 );
+        } elseif ( strpos( $part, 'v1=' ) === 0 ) {
+            $signature = substr( $part, 3 );
+        }
+    }
+
+    if ( empty( $timestamp ) || empty( $signature ) ) {
+        throw new \Exception( 'Invalid signature format' );
+    }
+
+    // Check timestamp (reject if older than 5 minutes)
+    if ( time() - $timestamp > 300 ) {
+        throw new \Exception( 'Webhook timestamp too old' );
+    }
+
+    // Verify signature
+    $expected_signature = hash_hmac( 'sha256', $timestamp . '.' . $payload, $this->webhook_secret );
+    
+    if ( ! hash_equals( $expected_signature, $signature ) ) {
+        throw new \Exception( 'Invalid signature' );
+    }
+}
+
+/**
+ * Process webhook event.
+ *
+ * @param object $event Stripe event object.
+ * @return void
+ */
+private function process_webhook_event( $event ): void {
+    switch ( $event->type ) {
+        case 'checkout.session.completed':
+            $this->handle_checkout_session_completed( $event->data->object );
+            break;
+        case 'customer.subscription.created':
+            $this->handle_subscription_created( $event->data->object );
+            break;
+        case 'customer.subscription.updated':
+            $this->handle_subscription_updated( $event->data->object );
+            break;
+        case 'customer.subscription.deleted':
+            $this->handle_subscription_deleted( $event->data->object );
+            break;
+        case 'invoice.payment_failed':
+            $this->handle_payment_failed( $event->data->object );
+            break;
+        case 'invoice.payment_succeeded':
+            $this->handle_payment_succeeded( $event->data->object );
+            break;
+        case 'customer.updated':
+            $this->handle_customer_updated( $event->data->object );
+            break;
+        default:
+            error_log( 'Unhandled Stripe webhook event: ' . $event->type );
+    }
+}
+
+/**
+ * Handle checkout session completed.
+ *
+ * @param object $session Checkout session object.
+ * @return void
+ */
+private function handle_checkout_session_completed( $session ): void {
+    $customer_id = $session->customer;
+    $email = $session->customer_details->email ?? '';
+    $subscription_id = $session->subscription ?? null;
+    
+    // Get or create user
+    $user = get_user_by( 'email', $email );
+    
+    if ( ! $user ) {
+        $user_id = wp_create_user( $email, wp_generate_password(), $email );
+        if ( is_wp_error( $user_id ) ) {
+            error_log( 'Failed to create user for email: ' . $email );
+            return;
+        }
+        $user = get_user_by( 'id', $user_id );
+    }
+
+    // Add membership role
+    $user->add_role( 'lnmc_member' );
+
+    // Save member to database
+    $member_data = array(
+        'user_id' => $user->ID,
+        'membership_status' => 'active',
+        'membership_type' => 'standard',
+        'subscription_id' => $subscription_id,
+        'payment_amount' => $session->amount_total / 100, // Convert from cents
+        'payment_currency' => strtoupper( $session->currency ),
+        'join_date' => current_time( 'mysql' ),
+        'payment_status' => 'completed',
+        'stripe_customer_id' => $customer_id,
+        'stripe_subscription_id' => $subscription_id,
+        'webhook_processed' => 1,
+    );
+
+    $member_id = $this->database->save_member( $member_data );
+
+    if ( $member_id ) {
+        // Log the activity
+        $this->database->log_activity(
+            $member_id,
+            'membership_created',
+            sprintf( 'Membership created via Stripe checkout for user %s', $user->display_name ),
+            array(
+                'session_id' => $session->id,
+                'customer_id' => $customer_id,
+                'subscription_id' => $subscription_id,
+                'amount' => $session->amount_total / 100,
+            )
+        );
+
+        // Send welcome email
+        $this->send_welcome_email( $email );
+    }
+}
+
+/**
+ * Handle subscription created.
+ *
+ * @param object $subscription Subscription object.
+ * @return void
+ */
+private function handle_subscription_created( $subscription ): void {
+    $customer_id = $subscription->customer;
+    $email = $this->get_customer_email( $customer_id );
+    
+    // Find member by customer ID
+    $member = $this->database->get_member_by_stripe_customer_id( $customer_id );
+    if ( $member ) {
+        $this->database->update_member( $member->id, array(
+            'membership_status' => 'active',
+            'stripe_subscription_id' => $subscription->id,
+            'webhook_processed' => 1,
+        ) );
+
+        // Log the activity
+        $this->database->log_activity(
+            $member->id,
+            'subscription_created',
+            sprintf( 'Stripe subscription created: %s', $subscription->id ),
+            array( 'subscription_id' => $subscription->id )
+        );
+    }
+}
+
+/**
+ * Handle subscription updated.
+ *
+ * @param object $subscription Subscription object.
+ * @return void
+ */
+private function handle_subscription_updated( $subscription ): void {
+    $customer_id = $subscription->customer;
+    $status = $subscription->status;
+    
+    // Find member by customer ID
+    $member = $this->database->get_member_by_stripe_customer_id( $customer_id );
+    if ( $member ) {
+        $update_data = array(
+            'membership_status' => $status,
+            'webhook_processed' => 1,
+        );
+
+        // Update expiry date if available
+        if ( isset( $subscription->current_period_end ) ) {
+            $update_data['expiry_date'] = date( 'Y-m-d H:i:s', $subscription->current_period_end );
+        }
+
+        $this->database->update_member( $member->id, $update_data );
+
+        // Log the activity
+        $this->database->log_activity(
+            $member->id,
+            'subscription_updated',
+            sprintf( 'Subscription status updated to: %s', $status ),
+            array( 'subscription_id' => $subscription->id, 'status' => $status )
+        );
+    }
+}
+
+/**
+ * Handle subscription deleted.
+ *
+ * @param object $subscription Subscription object.
+ * @return void
+ */
+private function handle_subscription_deleted( $subscription ): void {
+    $customer_id = $subscription->customer;
+    
+    // Find member by customer ID or subscription ID
+    $member = $this->database->get_member_by_stripe_customer_id( $customer_id );
+    if ( ! $member ) {
+        $member = $this->database->get_member_by_stripe_subscription_id( $subscription->id );
+    }
+
+    if ( $member ) {
+        // Update member status
+        $this->database->update_member( $member->id, array(
+            'membership_status' => 'cancelled',
+            'payment_status' => 'cancelled',
+            'webhook_processed' => 1,
+        ) );
+
+        // Remove membership role from user
+        $user = get_user_by( 'id', $member->user_id );
+        if ( $user ) {
+            $user->remove_role( 'lnmc_member' );
+        }
+
+        // Log the activity
+        $this->database->log_activity(
+            $member->id,
+            'subscription_cancelled',
+            sprintf( 'Subscription cancelled: %s', $subscription->id ),
+            array( 'subscription_id' => $subscription->id )
+        );
+    }
+}
+
+/**
+ * Handle payment failed.
+ *
+ * @param object $invoice Invoice object.
+ * @return void
+ */
+private function handle_payment_failed( $invoice ): void {
+    $customer_id = $invoice->customer;
+    $subscription_id = $invoice->subscription;
+    
+    // Find member by customer ID
+    $member = $this->database->get_member_by_stripe_customer_id( $customer_id );
+    if ( $member ) {
+        $this->database->update_member( $member->id, array(
+            'membership_status' => 'past_due',
+            'payment_status' => 'failed',
+            'webhook_processed' => 1,
+        ) );
+
+        // Log the activity
+        $this->database->log_activity(
+            $member->id,
+            'payment_failed',
+            sprintf( 'Payment failed for invoice: %s', $invoice->id ),
+            array( 'invoice_id' => $invoice->id, 'subscription_id' => $subscription_id )
+        );
+
+        // Send payment failed email
+        $user = get_user_by( 'id', $member->user_id );
+        if ( $user ) {
+            $this->send_payment_failed_email( $user->user_email );
+        }
+    }
+}
+
+/**
+ * Handle payment succeeded.
+ *
+ * @param object $invoice Invoice object.
+ * @return void
+ */
+private function handle_payment_succeeded( $invoice ): void {
+    $customer_id = $invoice->customer;
+    $subscription_id = $invoice->subscription;
+    
+    // Find member by customer ID
+    $member = $this->database->get_member_by_stripe_customer_id( $customer_id );
+    if ( $member ) {
+        $this->database->update_member( $member->id, array(
+            'membership_status' => 'active',
+            'payment_status' => 'completed',
+            'last_payment_date' => current_time( 'mysql' ),
+            'webhook_processed' => 1,
+        ) );
+
+        // Log the activity
+        $this->database->log_activity(
+            $member->id,
+            'payment_succeeded',
+            sprintf( 'Payment succeeded for invoice: %s', $invoice->id ),
+            array( 'invoice_id' => $invoice->id, 'subscription_id' => $subscription_id )
+        );
+    }
+}
+
+/**
+ * Handle customer updated.
+ *
+ * @param object $customer Customer object.
+ * @return void
+ */
+private function handle_customer_updated( $customer ): void {
+    // Find member by customer ID
+    $member = $this->database->get_member_by_stripe_customer_id( $customer->id );
+    if ( $member ) {
+        // Log the activity
+        $this->database->log_activity(
+            $member->id,
+            'customer_updated',
+            sprintf( 'Customer information updated in Stripe: %s', $customer->id ),
+            array( 'customer_id' => $customer->id )
+        );
+    }
+}
+
+/**
+ * Get customer email from Stripe.
+ *
+ * @param string $customer_id Customer ID.
+ * @return string Customer email.
+ */
+private function get_customer_email( string $customer_id ): string {
+    \Stripe\Stripe::setApiKey( $this->secret_key );
+    $customer = \Stripe\Customer::retrieve( $customer_id );
+
+    return $customer->email ?? '';
+}
+
+/**
+ * Send welcome email.
+ *
+ * @param string $email User email.
+ * @return void
+ */
+private function send_welcome_email( string $email ): void {
+    $user = get_user_by( 'email', $email );
+    if ( ! $user ) {
+        return;
+    }
+
+    // Use the Email Helper class
+    \LNMC_Member_Hub\Utils\Email_Helper::send_welcome_email( $user->ID, 'LNMC Membership' );
+}
+
+/**
+ * Send payment failed email.
+ *
+ * @param string $email User email.
+ * @return void
+ */
+private function send_payment_failed_email( string $email ): void {
+    $user = get_user_by( 'email', $email );
+    if ( ! $user ) {
+        return;
+    }
+
+    $subject = __( 'Payment Failed - LNMC Membership', 'lnmc-member-hub' );
+    $message = __( 'Your membership payment was not successful. Please update your payment method to continue your membership.', 'lnmc-member-hub' );
+
+    wp_mail( $email, $subject, $message );
+}
+
+/**
+ * Retry failed webhook.
+ *
+ * @return void
+ */
+public function retry_failed_webhook(): void {
+    // Verify nonce
+    if ( ! wp_verify_nonce( $_POST['nonce'] ?? '', 'lnmc_stripe_checkout' ) ) {
+        wp_send_json_error( __( 'Security check failed.', 'lnmc-member-hub' ) );
+    }
+
+    // Check permissions
+    if ( ! current_user_can( 'manage_options' ) ) {
+        wp_send_json_error( __( 'Insufficient permissions.', 'lnmc-member-hub' ) );
+    }
+
+    $webhook_id = sanitize_text_field( $_POST['webhook_id'] ?? '' );
+    if ( empty( $webhook_id ) ) {
+        wp_send_json_error( __( 'Webhook ID is required.', 'lnmc-member-hub' ) );
+    }
+
+    try {
+        // Implement webhook retry logic here
+        // This would typically involve fetching the event from Stripe and reprocessing it
+        wp_send_json_success( __( 'Webhook retry initiated.', 'lnmc-member-hub' ) );
+    } catch ( \Exception $e ) {
+        wp_send_json_error( $e->getMessage() );
+    }
+}
+
+/**
+ * Get Stripe publishable key.
+ *
+ * @return string
+ */
+public function get_publishable_key(): string {
+    return $this->publishable_key;
+}
+
+/**
+ * Check if Stripe is configured.
+ *
+ * @return bool
+ */
+public function is_configured(): bool {
+    return ! empty( $this->publishable_key ) && ! empty( $this->secret_key );
+}
+
+/**
+ * Get current mode.
+ *
+ * @return string
+ */
+public function get_mode(): string {
+    return $this->mode;
+}
+
+/**
+ * Get member by Stripe customer ID.
+ *
+ * @param string $customer_id Stripe customer ID.
+ * @return object|null Member object or null.
+ */
+public function get_member_by_stripe_customer_id( string $customer_id ) {
+    return $this->database->get_member_by_stripe_customer_id( $customer_id );
+}
+
+/**
+ * Get member by Stripe subscription ID.
+ *
+ * @param string $subscription_id Stripe subscription ID.
+ * @return object|null Member object or null.
+ */
+public function get_member_by_stripe_subscription_id( string $subscription_id ) {
+    return $this->database->get_member_by_stripe_subscription_id( $subscription_id );
+}
+
 }
