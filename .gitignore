@@ -1,0 +1,8 @@
+node_modules/
+playwright-report/
+test-results/
+*.log
+
+# macOS cruft
+.DS_Store
+

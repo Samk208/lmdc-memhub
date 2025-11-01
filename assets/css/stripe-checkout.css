@@ -1,0 +1,241 @@
+/**
+ * Stripe Checkout Styles
+ *
+ * @package LNMC_Member_Hub
+ * @since 1.0.0
+ */
+
+/* Membership Form Container */
+.lnmc-membership-form {
+    max-width: 500px;
+    margin: 2rem auto;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+}
+
+/* Membership Card */
+.lnmc-membership-card {
+    background: #ffffff;
+    border: 1px solid #e1e5e9;
+    border-radius: 8px;
+    padding: 2rem;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+/* Form Title */
+.lnmc-membership-title {
+    font-size: 1.5rem;
+    font-weight: 600;
+    color: #1a1a1a;
+    margin: 0 0 1rem 0;
+    text-align: center;
+}
+
+/* Form Description */
+.lnmc-membership-description {
+    color: #6b7280;
+    text-align: center;
+    margin: 0 0 2rem 0;
+    line-height: 1.5;
+}
+
+/* Form Fields */
+.lnmc-form-field {
+    margin-bottom: 1.5rem;
+}
+
+.lnmc-form-label {
+    display: block;
+    font-weight: 500;
+    color: #374151;
+    margin-bottom: 0.5rem;
+    font-size: 0.875rem;
+}
+
+.lnmc-form-input {
+    width: 100%;
+    padding: 0.75rem;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    font-size: 1rem;
+    transition: border-color 0.15s ease-in-out, box-shadow 0.15s ease-in-out;
+    box-sizing: border-box;
+}
+
+.lnmc-form-input:focus {
+    outline: none;
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+/* Amount Display */
+.lnmc-amount-display {
+    background: #f3f4f6;
+    padding: 0.75rem;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    font-size: 1.25rem;
+    font-weight: 600;
+    color: #1f2937;
+    text-align: center;
+}
+
+/* Submit Button */
+.lnmc-submit-button {
+    width: 100%;
+    background: #3b82f6;
+    color: white;
+    border: none;
+    padding: 0.875rem 1.5rem;
+    border-radius: 6px;
+    font-size: 1rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background-color 0.15s ease-in-out;
+    margin-top: 1rem;
+}
+
+.lnmc-submit-button:hover {
+    background: #2563eb;
+}
+
+.lnmc-submit-button:disabled {
+    background: #9ca3af;
+    cursor: not-allowed;
+}
+
+/* Payment Info */
+.lnmc-payment-info {
+    margin-top: 1.5rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid #e5e7eb;
+    text-align: center;
+}
+
+.lnmc-payment-info p {
+    color: #6b7280;
+    font-size: 0.875rem;
+    margin: 0;
+}
+
+/* Error Messages */
+.lnmc-error-message {
+    background: #fef2f2;
+    border: 1px solid #fecaca;
+    color: #dc2626;
+    padding: 1rem;
+    border-radius: 6px;
+    margin-bottom: 1rem;
+    font-size: 0.875rem;
+}
+
+/* Success Messages */
+.lnmc-success-message {
+    background: #f0fdf4;
+    border: 1px solid #bbf7d0;
+    color: #16a34a;
+    padding: 1rem;
+    border-radius: 6px;
+    margin-bottom: 1rem;
+    font-size: 0.875rem;
+}
+
+/* Direct Checkout Button */
+.lnmc-stripe-checkout-button {
+    display: inline-block;
+    background: #3b82f6;
+    color: white;
+    text-decoration: none;
+    padding: 0.875rem 1.5rem;
+    border-radius: 6px;
+    font-weight: 500;
+    transition: background-color 0.15s ease-in-out;
+    border: none;
+    cursor: pointer;
+    font-size: 1rem;
+}
+
+.lnmc-stripe-checkout-button:hover {
+    background: #2563eb;
+    color: white;
+    text-decoration: none;
+}
+
+.lnmc-stripe-checkout-button:disabled {
+    background: #9ca3af;
+    cursor: not-allowed;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+    .lnmc-membership-form {
+        margin: 1rem;
+        max-width: none;
+    }
+    
+    .lnmc-membership-card {
+        padding: 1.5rem;
+    }
+    
+    .lnmc-membership-title {
+        font-size: 1.25rem;
+    }
+}
+
+/* Loading States */
+.lnmc-loading {
+    opacity: 0.6;
+    pointer-events: none;
+}
+
+.lnmc-loading::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 20px;
+    height: 20px;
+    margin: -10px 0 0 -10px;
+    border: 2px solid #f3f3f3;
+    border-top: 2px solid #3b82f6;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+/* Accessibility */
+.lnmc-membership-form:focus-within {
+    outline: 2px solid #3b82f6;
+    outline-offset: 2px;
+}
+
+/* High contrast mode support */
+@media (prefers-contrast: high) {
+    .lnmc-membership-card {
+        border: 2px solid #000000;
+    }
+    
+    .lnmc-form-input {
+        border: 2px solid #000000;
+    }
+    
+    .lnmc-submit-button {
+        border: 2px solid #000000;
+    }
+}
+
+/* Reduced motion support */
+@media (prefers-reduced-motion: reduce) {
+    .lnmc-form-input,
+    .lnmc-submit-button,
+    .lnmc-stripe-checkout-button {
+        transition: none;
+    }
+    
+    .lnmc-loading::after {
+        animation: none;
+    }
+}

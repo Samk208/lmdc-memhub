@@ -1,0 +1,12 @@
+version: 1
+require_checks:
+  - name: GitHub CI
+    type: github
+    workflow: CI
+rules:
+  - name: Require green CI
+    condition: status('GitHub CI') == 'success'
+    on_fail: block
+preferences:
+  summarize_large_prs: true
+  max_comments: 50
